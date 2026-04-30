@@ -177,6 +177,60 @@ def test_list_skills_filter_unavailable_includes_when_bin_requirement_met(
     ]
 
 
+def test_list_skills_filter_unavailable_includes_workspace_bin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    skills_root = workspace / "skills"
+    skills_root.mkdir(parents=True)
+    skill_path = _write_skill(
+        skills_root,
+        "uses_workspace_bin",
+        metadata_json={"requires": {"bins": ["workspace-tool"]}},
+    )
+    bin_path = workspace / "bin" / "workspace-tool"
+    bin_path.parent.mkdir()
+    bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    bin_path.chmod(0o755)
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    monkeypatch.setattr("nanobot.agent.skills.shutil.which", lambda _cmd: None)
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    entries = loader.list_skills(filter_unavailable=True)
+    assert entries == [
+        {"name": "uses_workspace_bin", "path": str(skill_path), "source": "workspace"},
+    ]
+
+
+def test_list_skills_filter_unavailable_includes_skill_script_bin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    skills_root = workspace / "skills"
+    skills_root.mkdir(parents=True)
+    skill_path = _write_skill(
+        skills_root,
+        "uses_script",
+        metadata_json={"requires": {"bins": ["skill-tool"]}},
+    )
+    script_path = skills_root / "uses_script" / "scripts" / "skill-tool"
+    script_path.parent.mkdir()
+    script_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script_path.chmod(0o755)
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    monkeypatch.setattr("nanobot.agent.skills.shutil.which", lambda _cmd: None)
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    entries = loader.list_skills(filter_unavailable=True)
+    assert entries == [
+        {"name": "uses_script", "path": str(skill_path), "source": "workspace"},
+    ]
+
+
 def test_list_skills_filter_unavailable_false_keeps_unmet_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

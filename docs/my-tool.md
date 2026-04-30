@@ -39,7 +39,7 @@ Without parameters, returns a key config overview:
 ```text
 my(action="check")
 # → max_iterations: 40
-#   context_window_tokens: 65536
+#   context_window_tokens: 250000
 #   model: 'anthropic/claude-sonnet-4-20250514'
 #   workspace: PosixPath('/tmp/workspace')
 #   provider_retry_mode: 'standard'
@@ -86,7 +86,7 @@ my(action="set", key="max_iterations", value=80)
 my(action="set", key="model", value="fast-model")
 # → Switch to a faster model
 
-my(action="set", key="context_window_tokens", value=131072)
+my(action="set", key="context_window_tokens", value=500000)
 # → Expand context window for long documents
 ```
 
@@ -119,7 +119,7 @@ Other parameters (e.g. `workspace`, `provider_retry_mode`, `max_tool_result_char
 
 ```text
 Agent: This codebase is large, let me expand my context window to handle it.
-→ my(action="set", key="context_window_tokens", value=131072)
+→ my(action="set", key="context_window_tokens", value=500000)
 ```
 
 ### "Simple question, don't waste compute"

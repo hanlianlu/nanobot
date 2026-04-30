@@ -31,9 +31,9 @@ Concrete scenarios showing when and how to use the my tool effectively.
 ### Large codebase analysis
 ```
 → my(action="check")
-  → context_window_tokens: 65536
-→ my(action="set", key="context_window_tokens", value=131072)
-  → "Set context_window_tokens = 131072 (was 65536)"
+  → context_window_tokens: 250000
+→ my(action="set", key="context_window_tokens", value=500000)
+  → "Set context_window_tokens = 500000 (was 250000)"
 → "I've expanded my context window to handle this large codebase."
 ```
 

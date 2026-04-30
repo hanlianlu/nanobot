@@ -74,7 +74,7 @@ class AgentDefaults(Base):
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    context_window_tokens: int = 250_000
     context_block_limit: int | None = None
     temperature: float = 0.1
     max_tool_iterations: int = 200
@@ -206,6 +206,16 @@ class WebToolsConfig(Base):
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
 
 
+class VisionConfig(Base):
+    """Image description model configuration for vision skills."""
+
+    provider: str = "ollama"  # ollama or an OpenAI-compatible vision provider
+    model: str = "gemma4:26b-a4b-it-q4_K_M"
+    base_url: str = "http://localhost:11434"
+    api_key_env: str | None = None  # Env var containing the remote provider API key
+    timeout: int = Field(default=120, ge=1, le=600)
+
+
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
@@ -254,6 +264,7 @@ class Config(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
 
     @property
     def workspace_path(self) -> Path:

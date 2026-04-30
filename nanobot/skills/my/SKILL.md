@@ -35,7 +35,7 @@ always: true
 
 | Situation | Command |
 |-----------|---------|
-| Large codebase analysis | `my(action="set", key="context_window_tokens", value=131072)` |
+| Large codebase analysis | `my(action="set", key="context_window_tokens", value=500000)` |
 | Repetitive simple tasks | `my(action="set", key="model", value="<fast-model>")` |
 | Long multi-step task | `my(action="set", key="max_iterations", value=80)` |
 

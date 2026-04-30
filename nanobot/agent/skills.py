@@ -69,7 +69,11 @@ class SkillsLoader:
             skills = [s for s in skills if s["name"] not in self.disabled_skills]
 
         if filter_unavailable:
-            return [skill for skill in skills if self._check_requirements(self._get_skill_meta(skill["name"]))]
+            return [
+                skill
+                for skill in skills
+                if self._check_requirements(self._get_skill_meta(skill["name"]), skill["name"])
+            ]
         return skills
 
     def load_skill(self, name: str) -> str | None:
@@ -131,25 +135,55 @@ class SkillsLoader:
             if exclude and skill_name in exclude:
                 continue
             meta = self._get_skill_meta(skill_name)
-            available = self._check_requirements(meta)
+            available = self._check_requirements(meta, skill_name)
             desc = self._get_skill_description(skill_name)
             if available:
                 lines.append(f"- **{skill_name}** — {desc}  `{entry['path']}`")
             else:
-                missing = self._get_missing_requirements(meta)
+                missing = self._get_missing_requirements(meta, skill_name)
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
         return "\n".join(lines)
 
-    def _get_missing_requirements(self, skill_meta: dict) -> str:
+    def _get_missing_requirements(self, skill_meta: dict, skill_name: str | None = None) -> str:
         """Get a description of missing requirements."""
         requires = skill_meta.get("requires", {})
         required_bins = requires.get("bins", [])
         required_env_vars = requires.get("env", [])
         return ", ".join(
-            [f"CLI: {command_name}" for command_name in required_bins if not shutil.which(command_name)]
+            [
+                f"CLI: {command_name}"
+                for command_name in required_bins
+                if not self._bin_available(command_name, skill_name)
+            ]
             + [f"ENV: {env_name}" for env_name in required_env_vars if not os.environ.get(env_name)]
         )
+
+    def _bin_search_dirs(self, skill_name: str | None = None) -> list[Path]:
+        """Return workspace-local command directories for skill requirement checks."""
+        dirs = [self.workspace / "bin"]
+        if skill_name:
+            dirs.append(self.workspace_skills / skill_name / "scripts")
+            if self.builtin_skills:
+                dirs.append(self.builtin_skills / skill_name / "scripts")
+        return dirs
+
+    def _bin_available(self, command_name: str, skill_name: str | None = None) -> bool:
+        """Return True if a required command is on PATH or bundled with the workspace/skill."""
+        if shutil.which(command_name):
+            return True
+
+        candidate_names = [command_name]
+        if os.name == "nt" and not Path(command_name).suffix:
+            path_ext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+            candidate_names.extend(command_name + ext.lower() for ext in path_ext.split(";") if ext)
+
+        for directory in self._bin_search_dirs(skill_name):
+            for candidate_name in candidate_names:
+                candidate = directory / candidate_name
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return True
+        return False
 
     def _get_skill_description(self, name: str) -> str:
         """Get the description of a skill from its frontmatter."""
@@ -186,12 +220,12 @@ class SkillsLoader:
         payload = data.get("nanobot", data.get("openclaw", {}))
         return payload if isinstance(payload, dict) else {}
 
-    def _check_requirements(self, skill_meta: dict) -> bool:
+    def _check_requirements(self, skill_meta: dict, skill_name: str | None = None) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
         requires = skill_meta.get("requires", {})
         required_bins = requires.get("bins", [])
         required_env_vars = requires.get("env", [])
-        return all(shutil.which(cmd) for cmd in required_bins) and all(
+        return all(self._bin_available(cmd, skill_name) for cmd in required_bins) and all(
             os.environ.get(var) for var in required_env_vars
         )
 

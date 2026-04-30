@@ -783,6 +783,30 @@ Use `enabledTools` to register only a subset of tools from an MCP server:
 MCP tools are automatically discovered and registered on startup. The LLM can use them alongside built-in tools — no extra configuration needed.
 
 
+## Vision
+
+Image-description skills can read the top-level `vision` config to choose a dedicated
+vision model without hard-coding credentials in skill scripts.
+
+```json
+{
+  "vision": {
+    "provider": "ollama",
+    "model": "gemma4:26b-a4b-it-q4_K_M",
+    "baseUrl": "http://localhost:11434",
+    "apiKeyEnv": null,
+    "timeout": 120
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `vision.provider` | `"ollama"` | Vision backend. Local Ollama needs no API key; remote OpenAI-compatible providers should use `apiKeyEnv`. |
+| `vision.model` | `"gemma4:26b-a4b-it-q4_K_M"` | Model used for image descriptions. |
+| `vision.baseUrl` | `"http://localhost:11434"` | Provider base URL. Ollama scripts call `/api/chat`; OpenAI-compatible scripts can call `/chat/completions`. |
+| `vision.apiKeyEnv` | `null` | Name of the environment variable containing the API key. Add the same name to `tools.exec.allowedEnvKeys` before using remote providers from shell skills. |
+| `vision.timeout` | `120` | Request timeout in seconds. |
 
 
 ## Security
