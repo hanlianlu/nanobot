@@ -4,7 +4,7 @@
 
 **Goal:** Build a wife-only nanobot skill that maintains an independent US stock metrics archive, detects trends/anomalies, and delivers integrated PNG monitor cards in WeChat/Telegram.
 
-**Architecture:** Implement the monitor as a workspace skill under `/Users/hanlianlyu/.nanobot-wife/workspace/skills/market-metrics-monitor/`. The skill owns a small Python package in `scripts/market_metrics_monitor/`, stores data under `/Users/hanlianlyu/.nanobot-wife/workspace/data/market-metrics-monitor/`, and uses launchd for deterministic daily updates. It never writes finvesto data or calls the existing professional finance pipeline.
+**Architecture:** Implement the monitor as a wife-logical workspace skill under `/Users/hanlianlyu/.nanobot-wife/workspace/skills/market-metrics-monitor/`. On this Mac that path is a symlink into `/Users/hanlianlyu/.nanobot/workspace/skills/market-metrics-monitor/`; the main nanobot instance disables the skill through `agents.defaults.disabledSkills`, while wife leaves it enabled. The skill owns a small Python package in `scripts/market_metrics_monitor/`, stores data under `/Users/hanlianlyu/.nanobot-wife/workspace/data/market-metrics-monitor/`, and uses launchd for deterministic daily updates. It never writes finvesto data or calls the existing professional finance pipeline.
 
 **Tech Stack:** Python 3.11+, `uv run` with PEP 723 script dependencies, pandas/numpy/pyarrow for local storage and metrics, httpx for EOD providers, Jinja2 for HTML cards, Playwright for HTML-to-PNG rendering, pytest for verification, launchd for macOS scheduling.
 
@@ -48,6 +48,12 @@ Create these files under the wife workspace:
       test_cli.py
       test_launchd.py
 ```
+
+Implementation note for this machine: because `~/.nanobot-wife/workspace/skills`
+is a symlink to `~/.nanobot/workspace/skills`, commit skill-file changes from
+`/Users/hanlianlyu/.nanobot/workspace` with `git add -f
+skills/market-metrics-monitor`. Do not try to track files through the wife
+workspace symlink. Runtime data still belongs under the wife data directory.
 
 The implementation writes runtime data under:
 

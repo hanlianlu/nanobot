@@ -12,7 +12,20 @@ This is not the existing finance skill and not the finvesto professional investm
 
 ## 2. Skill Placement and Discovery
 
-The skill will live in the wife workspace:
+The skill is logically wife-only. On this Mac, the wife workspace currently has
+`/Users/hanlianlyu/.nanobot-wife/workspace/skills` symlinked to the main
+workspace skills directory:
+
+```text
+/Users/hanlianlyu/.nanobot-wife/workspace/skills
+  -> /Users/hanlianlyu/.nanobot/workspace/skills
+```
+
+Therefore the physical skill files live in the shared skills target while the
+main nanobot instance disables this skill through `agents.defaults.disabledSkills`.
+The wife instance does not disable it, so it can discover and use the skill.
+
+The logical skill path remains:
 
 ```text
 /Users/hanlianlyu/.nanobot-wife/workspace/skills/market-metrics-monitor/
@@ -22,7 +35,7 @@ The skill will live in the wife workspace:
   assets/
 ```
 
-Nanobot discovers workspace skills from `<workspace>/skills/{name}/SKILL.md` and builtin repo skills from `nanobot/skills/{name}/SKILL.md`. Workspace skills take precedence over builtin skills with the same name. The wife config already points `agents.defaults.workspace` to `~/.nanobot-wife/workspace`, so this location is discoverable after restarting `com.nanobot-wife.gateway`.
+Nanobot discovers workspace skills from `<workspace>/skills/{name}/SKILL.md` and builtin repo skills from `nanobot/skills/{name}/SKILL.md`. Workspace skills take precedence over builtin skills with the same name. The wife config already points `agents.defaults.workspace` to `~/.nanobot-wife/workspace`, so this logical location is discoverable after restarting `com.nanobot-wife.gateway`.
 
 ## 3. Boundaries
 
