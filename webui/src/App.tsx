@@ -5,9 +5,10 @@ import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { preloadMarkdownText } from "@/components/MarkdownText";
+
 import { useSessions } from "@/hooks/useSessions";
-import { useTheme } from "@/hooks/useTheme";
+import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
+import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import {
   clearSavedSecret,
@@ -16,8 +17,9 @@ import {
   loadSavedSecret,
   saveSecret,
 } from "@/lib/bootstrap";
+import { deriveTitle } from "@/lib/format";
 import { NanobotClient } from "@/lib/nanobot-client";
-import { ClientProvider } from "@/providers/ClientProvider";
+import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,12 +32,29 @@ type BootState =
       status: "ready";
       client: NanobotClient;
       token: string;
+      tokenExpiresAt: number;
       modelName: string | null;
     };
 
 const SIDEBAR_STORAGE_KEY = "nanobot-webui.sidebar";
+const RESTART_STARTED_KEY = "nanobot-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
+const TOKEN_REFRESH_MARGIN_MS = 30_000;
+const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
 type ShellView = "chat" | "settings";
+
+function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
+  return Date.now() + Math.max(0, expiresInSeconds) * 1000;
+}
+
+function tokenRefreshDelayMs(expiresAt: number): number {
+  const remaining = Math.max(0, expiresAt - Date.now());
+  const margin = Math.min(
+    TOKEN_REFRESH_MARGIN_MS,
+    Math.max(1_000, remaining / 2),
+  );
+  return Math.max(TOKEN_REFRESH_MIN_DELAY_MS, remaining - margin);
+}
 
 function AuthForm({
   failed,
@@ -105,6 +124,7 @@ function readSidebarOpen(): boolean {
 export default function App() {
   const { t } = useTranslation();
   const [state, setState] = useState<BootState>({ status: "loading" });
+  const bootstrapSecretRef = useRef("");
 
   const bootstrapWithSecret = useCallback(
     (secret: string) => {
@@ -116,22 +136,37 @@ export default function App() {
           if (cancelled) return;
           if (secret) saveSecret(secret);
           const url = deriveWsUrl(boot.ws_path, boot.token);
-          const client = new NanobotClient({
+          let client: NanobotClient;
+          client = new NanobotClient({
             url,
             onReauth: async () => {
               try {
-                const refreshed = await fetchBootstrap("", secret);
-                return deriveWsUrl(refreshed.ws_path, refreshed.token);
+                const refreshed = await fetchBootstrap("", bootstrapSecretRef.current);
+                const refreshedUrl = deriveWsUrl(refreshed.ws_path, refreshed.token);
+                const tokenExpiresAt = bootstrapTokenExpiresAt(refreshed.expires_in);
+                setState((current) =>
+                  current.status === "ready" && current.client === client
+                    ? {
+                        ...current,
+                        token: refreshed.token,
+                        tokenExpiresAt,
+                        modelName: refreshed.model_name ?? current.modelName,
+                      }
+                    : current,
+                );
+                return refreshedUrl;
               } catch {
                 return null;
               }
             },
           });
+          bootstrapSecretRef.current = secret;
           client.connect();
           setState({
             status: "ready",
             client,
             token: boot.token,
+            tokenExpiresAt: bootstrapTokenExpiresAt(boot.expires_in),
             modelName: boot.model_name ?? null,
           });
         } catch (e) {
@@ -152,26 +187,38 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (state.status !== "ready") return;
+    const client = state.client;
+    const timer = window.setTimeout(async () => {
+      try {
+        const boot = await fetchBootstrap("", bootstrapSecretRef.current);
+        const url = deriveWsUrl(boot.ws_path, boot.token);
+        const tokenExpiresAt = bootstrapTokenExpiresAt(boot.expires_in);
+        client.updateUrl(url);
+        setState((current) =>
+          current.status === "ready" && current.client === client
+            ? {
+                ...current,
+                token: boot.token,
+                tokenExpiresAt,
+                modelName: boot.model_name ?? current.modelName,
+              }
+            : current,
+        );
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
+          setState({ status: "auth", failed: true });
+        }
+      }
+    }, tokenRefreshDelayMs(state.tokenExpiresAt));
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  useEffect(() => {
     const saved = loadSavedSecret();
     return bootstrapWithSecret(saved);
   }, [bootstrapWithSecret]);
-
-  useEffect(() => {
-    const warm = () => preloadMarkdownText();
-    const win = globalThis as typeof globalThis & {
-      requestIdleCallback?: (
-        callback: IdleRequestCallback,
-        options?: IdleRequestOptions,
-      ) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-    if (typeof win.requestIdleCallback === "function") {
-      const id = win.requestIdleCallback(warm, { timeout: 1500 });
-      return () => win.cancelIdleCallback?.(id);
-    }
-    const id = globalThis.setTimeout(warm, 250);
-    return () => globalThis.clearTimeout(id);
-  }, []);
 
   if (state.status === "loading") {
     return (
@@ -235,8 +282,15 @@ export default function App() {
   );
 }
 
-function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName: string | null) => void; onLogout: () => void }) {
+function Shell({
+  onModelNameChange,
+  onLogout,
+}: {
+  onModelNameChange: (modelName: string | null) => void;
+  onLogout: () => void;
+}) {
   const { t, i18n } = useTranslation();
+  const { client } = useClient();
   const { theme, toggle } = useTheme();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -248,7 +302,9 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     key: string;
     label: string;
   } | null>(null);
-  const lastSessionsLen = useRef(0);
+  const restartSawDisconnectRef = useRef(false);
+  const [restartToast, setRestartToast] = useState<string | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   useEffect(() => {
     try {
@@ -261,13 +317,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     }
   }, [desktopSidebarOpen]);
 
-  useEffect(() => {
-    if (activeKey) return;
-    if (sessions.length > 0 && lastSessionsLen.current === 0) {
-      setActiveKey(sessions[0].key);
-    }
-    lastSessionsLen.current = sessions.length;
-  }, [sessions, activeKey]);
+
 
   const activeSession = useMemo<ChatSummary | null>(() => {
     if (!activeKey) return null;
@@ -326,9 +376,62 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     setMobileSidebarOpen(false);
   }, []);
 
-  const onTurnEnd = useCallback(() => {
-    void refresh();
-  }, [refresh]);
+  const onBackToChat = useCallback(() => {
+    setView("chat");
+    setMobileSidebarOpen(false);
+    setActiveKey((current) => {
+      if (!current) return null;
+      if (sessions.some((session) => session.key === current)) return current;
+      return sessions[0]?.key ?? null;
+    });
+  }, [sessions]);
+
+  const onRestart = useCallback(() => {
+    const chatId = activeSession?.chatId ?? client.defaultChatId;
+    if (!chatId) return;
+    restartSawDisconnectRef.current = false;
+    setIsRestarting(true);
+    try {
+      window.localStorage.setItem(RESTART_STARTED_KEY, String(Date.now()));
+    } catch {
+      // ignore storage errors
+    }
+    client.sendMessage(chatId, "/restart");
+  }, [activeSession?.chatId, client]);
+
+  useEffect(() => {
+    return client.onRuntimeModelUpdate((modelName) => {
+      onModelNameChange(modelName);
+    });
+  }, [client, onModelNameChange]);
+
+  useEffect(() => {
+    return client.onStatus((status) => {
+      let startedAt = 0;
+      try {
+        startedAt = Number(window.localStorage.getItem(RESTART_STARTED_KEY) ?? "0");
+      } catch {
+        startedAt = 0;
+      }
+      if (!startedAt) return;
+      if (status !== "open") {
+        restartSawDisconnectRef.current = true;
+        return;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (!restartSawDisconnectRef.current && elapsedMs < 1500) return;
+      try {
+        window.localStorage.removeItem(RESTART_STARTED_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setIsRestarting(false);
+      setRestartToast(t("app.restart.completed", { seconds: (elapsedMs / 1000).toFixed(1) }));
+      window.setTimeout(() => setRestartToast(null), 3_500);
+    });
+  }, [client, t]);
+
+  const onTurnEnd = useDeferredTitleRefresh(activeSession, refresh);
 
   const onConfirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
@@ -350,15 +453,20 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
 
   const headerTitle = activeSession
     ? activeSession.title ||
-      activeSession.preview ||
-      t("chat.fallbackTitle", { id: activeSession.chatId.slice(0, 6) })
+      deriveTitle(activeSession.preview, t("chat.newChat"))
     : t("app.brand");
 
   useEffect(() => {
+    if (view === "settings") {
+      document.title = t("app.documentTitle.chat", {
+        title: t("settings.sidebar.title"),
+      });
+      return;
+    }
     document.title = activeSession
       ? t("app.documentTitle.chat", { title: headerTitle })
       : t("app.documentTitle.base");
-  }, [activeSession, headerTitle, i18n.resolvedLanguage, t]);
+  }, [activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
 
   const sidebarProps = {
     sessions,
@@ -368,75 +476,100 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     onSelect: onSelectChat,
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
+    onOpenSettings,
   };
+  const showMainSidebar = view !== "settings";
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden">
-      {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
-      <aside
-        className={cn(
-          "relative z-20 hidden shrink-0 overflow-hidden lg:block",
-          "transition-[width] duration-300 ease-out",
-        )}
-        style={{ width: desktopSidebarOpen ? SIDEBAR_WIDTH : 0 }}
-      >
-        <div
-          className={cn(
-            "absolute inset-y-0 left-0 h-full overflow-hidden bg-sidebar shadow-inner-right",
-            "transition-transform duration-300 ease-out",
-            desktopSidebarOpen ? "translate-x-0" : "-translate-x-full",
+    <ThemeProvider theme={theme}>
+      <div className="relative flex h-full w-full overflow-hidden">
+        {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
+        {showMainSidebar ? (
+          <aside
+            className={cn(
+              "relative z-20 hidden shrink-0 overflow-hidden lg:block",
+              "transition-[width] duration-300 ease-out",
+            )}
+            style={{ width: desktopSidebarOpen ? SIDEBAR_WIDTH : 0 }}
+          >
+            <div
+              className={cn(
+                "absolute inset-y-0 left-0 h-full overflow-hidden bg-sidebar shadow-inner-right",
+                "transition-transform duration-300 ease-out",
+                desktopSidebarOpen ? "translate-x-0" : "-translate-x-full",
+              )}
+              style={{ width: SIDEBAR_WIDTH }}
+            >
+              <Sidebar {...sidebarProps} onCollapse={closeDesktopSidebar} />
+            </div>
+          </aside>
+        ) : null}
+
+        {showMainSidebar ? (
+          <Sheet
+            open={mobileSidebarOpen}
+            onOpenChange={(open) => setMobileSidebarOpen(open)}
+          >
+            <SheetContent
+              side="left"
+              showCloseButton={false}
+              className="p-0 lg:hidden"
+              style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+            >
+              <Sidebar {...sidebarProps} onCollapse={closeMobileSidebar} />
+            </SheetContent>
+          </Sheet>
+        ) : null}
+
+        <main className="relative flex h-full min-w-0 flex-1 flex-col">
+          <div
+            className={cn(
+              "absolute inset-0 flex flex-col",
+              view === "settings" && "invisible pointer-events-none",
+            )}
+          >
+            <ThreadShell
+              session={activeSession}
+              title={headerTitle}
+              onToggleSidebar={toggleSidebar}
+              onNewChat={onNewChat}
+              onCreateChat={onCreateChat}
+              onTurnEnd={onTurnEnd}
+              theme={theme}
+              onToggleTheme={toggle}
+              hideSidebarToggleOnDesktop={desktopSidebarOpen}
+            />
+          </div>
+          {view === "settings" && (
+            <div className="absolute inset-0 flex flex-col">
+              <SettingsView
+                theme={theme}
+                onToggleTheme={toggle}
+                onBackToChat={onBackToChat}
+                onModelNameChange={onModelNameChange}
+                onLogout={onLogout}
+                onRestart={onRestart}
+                isRestarting={isRestarting}
+              />
+            </div>
           )}
-          style={{ width: SIDEBAR_WIDTH }}
-        >
-          <Sidebar {...sidebarProps} onCollapse={closeDesktopSidebar} />
-        </div>
-      </aside>
+        </main>
 
-      <Sheet
-        open={mobileSidebarOpen}
-        onOpenChange={(open) => setMobileSidebarOpen(open)}
-      >
-        <SheetContent
-          side="left"
-          showCloseButton={false}
-          className="p-0 lg:hidden"
-          style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
-        >
-          <Sidebar {...sidebarProps} onCollapse={closeMobileSidebar} />
-        </SheetContent>
-      </Sheet>
-
-      <main className="flex h-full min-w-0 flex-1 flex-col">
-        {view === "settings" ? (
-          <SettingsView
-            theme={theme}
-            onToggleTheme={toggle}
-            onBackToChat={() => setView("chat")}
-            onModelNameChange={onModelNameChange}
-            onLogout={onLogout}
-          />
-        ) : (
-          <ThreadShell
-            session={activeSession}
-            title={headerTitle}
-            onToggleSidebar={toggleSidebar}
-            onNewChat={onNewChat}
-            onCreateChat={onCreateChat}
-            onTurnEnd={onTurnEnd}
-            theme={theme}
-            onToggleTheme={toggle}
-            onOpenSettings={onOpenSettings}
-            hideSidebarToggleOnDesktop={desktopSidebarOpen}
-          />
-        )}
-      </main>
-
-      <DeleteConfirm
-        open={!!pendingDelete}
-        title={pendingDelete?.label ?? ""}
-        onCancel={() => setPendingDelete(null)}
-        onConfirm={onConfirmDelete}
-      />
-    </div>
+        <DeleteConfirm
+          open={!!pendingDelete}
+          title={pendingDelete?.label ?? ""}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={onConfirmDelete}
+        />
+        {restartToast ? (
+          <div
+            role="status"
+            className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
+          >
+            {restartToast}
+          </div>
+        ) : null}
+      </div>
+    </ThemeProvider>
   );
 }

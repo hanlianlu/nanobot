@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteSession,
-  fetchSessionMessages,
+  fetchWebuiThread,
   listSessions,
   listSlashCommands,
+  updateProviderSettings,
   updateSettings,
+  updateWebSearchSettings,
 } from "@/lib/api";
 
 describe("webui API helpers", () => {
@@ -19,13 +21,14 @@ describe("webui API helpers", () => {
     );
   });
 
-  it("percent-encodes websocket keys when fetching session history", async () => {
-    await fetchSessionMessages("tok", "websocket:chat-1");
+  it("percent-encodes websocket keys when fetching webui-thread snapshot", async () => {
+    await fetchWebuiThread("tok", "websocket:chat-1");
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/messages",
+      "/api/sessions/websocket%3Achat-1/webui-thread",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
+        credentials: "same-origin",
       }),
     );
   });
@@ -49,6 +52,35 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/update?model=openrouter%2Ftest&provider=openrouter",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes provider settings updates without returning secrets", async () => {
+    await updateProviderSettings("tok", {
+      provider: "openrouter",
+      apiKey: "sk-or-test",
+      apiBase: "https://openrouter.ai/api/v1",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/provider/update?provider=openrouter&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes web search settings updates", async () => {
+    await updateWebSearchSettings("tok", {
+      provider: "searxng",
+      baseUrl: "https://search.example.com",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/web-search/update?provider=searxng&base_url=https%3A%2F%2Fsearch.example.com",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
@@ -84,6 +116,18 @@ describe("webui API helpers", () => {
       ok: true,
       json: async () => ({
         commands: [
+          {
+            command: "/stop",
+            title: "Stop current task",
+            description: "Cancel the active task.",
+            icon: "square",
+          },
+          {
+            command: "/restart",
+            title: "Restart nanobot",
+            description: "Restart the bot process.",
+            icon: "rotate-cw",
+          },
           {
             command: "/history",
             title: "Show conversation history",
