@@ -6,21 +6,126 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Clock3,
+  Copy,
+  ImageIcon,
+  Sparkles,
+  Wrench,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { CliAppMentionText } from "@/components/CliAppMentionText";
+import { AttachmentTile } from "@/components/AttachmentTile";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { SlashCommandText } from "@/components/SlashCommandText";
+import { UserMessageText } from "@/components/UserMessageText";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatTurnLatency } from "@/lib/format";
-import type { CliAppInfo, UICliAppAttachment, UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+import { toMediaAttachment } from "@/lib/media";
+import { matchingSlashCommand } from "@/lib/slash-command";
+import type {
+  CliAppInfo,
+  McpPresetInfo,
+  SlashCommand,
+  UICliAppAttachment,
+  UIMcpPresetAttachment,
+  UIImage,
+  UIMediaAttachment,
+  UIMessage,
+} from "@/lib/types";
 
 interface MessageBubbleProps {
   message: UIMessage;
-  /** When false, hide the assistant reply copy button (mid-turn text before more agent activity). Default true. */
-  showAssistantCopyAction?: boolean;
+  /** When false, hide this message's copy button. Default true. */
+  showCopyAction?: boolean;
   cliApps?: CliAppInfo[];
+  mcpPresets?: McpPresetInfo[];
+  slashCommands?: SlashCommand[];
+  onOpenFilePreview?: (path: string) => void;
+  onForkFromHere?: () => void;
+}
+
+function ForkArrowIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <path d="M16 3h5v5" />
+      <path d="M8 3H3v5" />
+      <path d="m21 3-7.536 7.536A5 5 0 0 0 12 14.07V21" />
+      <path d="m3 3 7.536 7.536A5 5 0 0 1 12 14.07V15" />
+    </svg>
+  );
+}
+
+function MessageCopyButton({ content }: { content: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const copyResetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current !== null) {
+        window.clearTimeout(copyResetRef.current);
+      }
+    };
+  }, []);
+
+  const onCopy = useCallback(() => {
+    void copyTextToClipboard(content).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      if (copyResetRef.current !== null) {
+        window.clearTimeout(copyResetRef.current);
+      }
+      copyResetRef.current = window.setTimeout(() => {
+        setCopied(false);
+        copyResetRef.current = null;
+      }, 1_500);
+    });
+  }, [content]);
+
+  const label = copied ? t("message.copiedReply") : t("message.copyReply");
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label={label}
+          className={cn(
+            "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+            "transition-colors hover:bg-muted/55 hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          {copied ? (
+            <Check className="h-4 w-4" aria-hidden />
+          ) : (
+            <Copy className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center">{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /**
@@ -34,39 +139,23 @@ interface MessageBubbleProps {
  */
 export function MessageBubble({
   message,
-  showAssistantCopyAction = true,
+  showCopyAction = true,
   cliApps = [],
+  mcpPresets = [],
+  slashCommands = [],
+  onOpenFilePreview,
+  onForkFromHere,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copyResetRef = useRef<number | null>(null);
   const baseAnim = "animate-in fade-in-0 slide-in-from-bottom-1 duration-300";
   const mentionCliApps = useMemo(
     () => mergeCliMentionApps(cliApps, message.cliApps),
     [cliApps, message.cliApps],
   );
-
-  useEffect(() => {
-    return () => {
-      if (copyResetRef.current !== null) {
-        window.clearTimeout(copyResetRef.current);
-      }
-    };
-  }, []);
-
-  const onCopyAssistantReply = useCallback(() => {
-    if (!navigator.clipboard) return;
-    void navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      if (copyResetRef.current !== null) {
-        window.clearTimeout(copyResetRef.current);
-      }
-      copyResetRef.current = window.setTimeout(() => {
-        setCopied(false);
-        copyResetRef.current = null;
-      }, 1_500);
-    });
-  }, [message.content]);
+  const mentionMcpPresets = useMemo(
+    () => mergeMcpMentionPresets(mcpPresets, message.mcpPresets),
+    [mcpPresets, message.mcpPresets],
+  );
 
   if (message.kind === "trace") {
     return <TraceGroup message={message} animClass={baseAnim} />;
@@ -78,6 +167,23 @@ export function MessageBubble({
     const hasImages = images.length > 0;
     const hasMedia = media.length > 0;
     const hasText = message.content.trim().length > 0;
+    const slashCommand = matchingSlashCommand(message.content, slashCommands);
+    const messageText = slashCommand ? (
+      <>
+        <SlashCommandText command={slashCommand.command} />
+        <UserMessageText
+          text={message.content.slice(slashCommand.command.length)}
+          cliApps={mentionCliApps}
+          mcpPresets={mentionMcpPresets}
+        />
+      </>
+    ) : (
+      <UserMessageText
+        text={message.content}
+        cliApps={mentionCliApps}
+        mcpPresets={mentionMcpPresets}
+      />
+    );
     return (
       <div
         className={cn(
@@ -92,12 +198,19 @@ export function MessageBubble({
         {hasText ? (
           <p
             className={cn(
-              "ml-auto w-fit rounded-[18px] bg-secondary/70 px-4 py-2",
-              "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words",
+              "ml-auto w-fit max-w-full min-w-0 rounded-[18px] bg-secondary/70 px-4 py-2",
+              "text-left text-[16px]/[1.75] whitespace-pre-wrap [overflow-wrap:anywhere]",
             )}
           >
-            <CliAppMentionText text={message.content} cliApps={mentionCliApps} />
+            {messageText}
           </p>
+        ) : null}
+        {hasText && showCopyAction ? (
+          <TooltipProvider delayDuration={220} skipDelayDuration={80}>
+            <div className="flex min-h-8 items-center justify-end text-muted-foreground">
+              <MessageCopyButton content={message.content} />
+            </div>
+          </TooltipProvider>
         ) : null}
       </div>
     );
@@ -108,62 +221,147 @@ export function MessageBubble({
   const reasoning = message.role === "assistant" ? message.reasoning ?? "" : "";
   const reasoningStreaming = !!(message.role === "assistant" && message.reasoningStreaming);
   const hasReasoning = reasoning.length > 0 || reasoningStreaming;
+  const automationSourceKind = message.source?.kind;
+  const automationSourceName = message.source?.label?.trim();
+  const automationSourceLabel = (
+    automationSourceKind === "cron"
+    || automationSourceKind === "local_trigger"
+    || automationSourceKind === "trigger"
+  )
+    ? (automationSourceName || t("message.automationSourceFallback"))
+    : "";
+  const automationTriggeredLabel = t("message.automationTriggered");
 
   const showAssistantActions = message.role === "assistant" && !message.isStreaming && !empty;
-  const showCopyButton = showAssistantCopyAction && showAssistantActions;
+  const showCopyButton = showCopyAction && showAssistantActions;
+  const showForkButton = showAssistantActions && !!onForkFromHere;
+  const forkLabel = t("message.forkFromHere");
   const latencyMs = message.latencyMs;
   const showLatencyFooter =
     message.role === "assistant"
     && latencyMs != null
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
-  const showAssistantFooterRow = showCopyButton || showLatencyFooter;
+  const showAssistantFooterRow = showCopyButton || showForkButton || showLatencyFooter;
   return (
     <div className={cn("w-full text-[15px]", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
       {hasReasoning ? (
-        <ReasoningBubble text={reasoning} streaming={reasoningStreaming} hasBodyBelow={!empty} />
+        <ReasoningBubble
+          text={reasoning}
+          streaming={reasoningStreaming}
+          hasBodyBelow={!empty}
+          onOpenFilePreview={onOpenFilePreview}
+        />
       ) : null}
       {empty && message.isStreaming && !hasReasoning ? (
         <TypingDots />
       ) : empty && message.isStreaming ? null : (
         <>
-          <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
+          {automationSourceLabel ? (
+            <AutomationSourceBadge
+              label={automationSourceLabel}
+              triggerLabel={automationTriggeredLabel}
+            />
+          ) : null}
+          <MarkdownText
+            streaming={!!message.isStreaming}
+            onOpenFilePreview={onOpenFilePreview}
+          >
+            {message.content}
+          </MarkdownText>
           {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
           {showAssistantFooterRow ? (
-            <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-              {showCopyButton ? (
-                <button
-                  type="button"
-                  onClick={onCopyAssistantReply}
-                  aria-label={copied ? t("message.copiedReply") : t("message.copyReply")}
-                  title={copied ? t("message.copiedReply") : t("message.copyReply")}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                    "transition-colors hover:bg-muted/55 hover:text-foreground",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  )}
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4" aria-hidden />
-                  ) : (
-                    <Copy className="h-4 w-4" aria-hidden />
-                  )}
-                </button>
-              ) : null}
-              {showLatencyFooter ? (
-                <span
-                  className="text-[11px] leading-none text-muted-foreground/70 tabular-nums"
-                  title={t("message.turnLatencyTitle")}
-                >
-                  {formatTurnLatency(latencyMs)}
-                </span>
-              ) : null}
-            </div>
+            <TooltipProvider delayDuration={220} skipDelayDuration={80}>
+              <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+                {showCopyButton ? (
+                  <MessageCopyButton content={message.content} />
+                ) : null}
+                {showForkButton ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={onForkFromHere}
+                        aria-label={forkLabel}
+                        className={cn(
+                          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                          "transition-colors hover:bg-muted/55 hover:text-foreground",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        )}
+                      >
+                        <ForkArrowIcon className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center">{forkLabel}</TooltipContent>
+                  </Tooltip>
+                ) : null}
+                {showLatencyFooter ? (
+                  <span
+                    className="text-[11px] leading-none text-muted-foreground/70 tabular-nums"
+                    title={t("message.turnLatencyTitle")}
+                  >
+                    {formatTurnLatency(latencyMs)}
+                  </span>
+                ) : null}
+              </div>
+            </TooltipProvider>
           ) : null}
         </>
       )}
     </div>
   );
+}
+
+function AutomationSourceBadge({ label, triggerLabel }: { label: string; triggerLabel: string }) {
+  return (
+    <div
+      className={cn(
+        "mb-2 inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-1",
+        "border border-sky-500/15 bg-sky-500/[0.06]",
+        "text-[11px] font-medium leading-none text-sky-700",
+        "dark:border-sky-300/15 dark:bg-sky-300/[0.08] dark:text-sky-200/80",
+      )}
+      title={triggerLabel}
+    >
+      <Clock3 className="h-3 w-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="text-current/45" aria-hidden>·</span>
+      <span className="shrink-0">{triggerLabel}</span>
+    </div>
+  );
+}
+
+function mergeMcpMentionPresets(
+  presets: McpPresetInfo[],
+  attachments: UIMcpPresetAttachment[] | undefined,
+): McpPresetInfo[] {
+  if (!attachments?.length) return presets;
+  const byName = new Map(presets.map((preset) => [preset.name.toLowerCase(), preset]));
+  for (const attachment of attachments) {
+    const name = attachment.name?.trim();
+    if (!name) continue;
+    const existing = byName.get(name.toLowerCase());
+    byName.set(name.toLowerCase(), {
+      name,
+      display_name: attachment.display_name || existing?.display_name || name,
+      category: attachment.category || existing?.category || "mcp",
+      description: existing?.description || "",
+      docs_url: existing?.docs_url || "",
+      transport: attachment.transport || existing?.transport || "mcp",
+      requires: existing?.requires || "",
+      note: existing?.note || "",
+      install_supported: existing?.install_supported ?? true,
+      installed: true,
+      configured: attachment.configured ?? existing?.configured ?? true,
+      available: existing?.available ?? true,
+      status: attachment.status || existing?.status || "configured",
+      logo_url: attachment.logo_url ?? existing?.logo_url ?? null,
+      brand_color: attachment.brand_color ?? existing?.brand_color ?? null,
+      required_fields: existing?.required_fields || [],
+      connection_summary: existing?.connection_summary || "",
+    });
+  }
+  return Array.from(byName.values());
 }
 
 function mergeCliMentionApps(
@@ -207,10 +405,11 @@ function MessageMedia({
   const images: UIImage[] = [];
   const nonImages: UIMediaAttachment[] = [];
   for (const item of media) {
-    if (item.kind === "image") {
-      images.push({ url: item.url, name: item.name });
+    const normalized = toMediaAttachment(item);
+    if (normalized.kind === "image") {
+      images.push({ url: normalized.url, name: normalized.name });
     } else {
-      nonImages.push(item);
+      nonImages.push(normalized);
     }
   }
 
@@ -225,69 +424,8 @@ function MessageMedia({
         <UserImages images={images} align={align} size={align === "left" ? "large" : "compact"} />
       ) : null}
       {nonImages.map((item, i) => (
-        <MediaCell key={`${item.url ?? item.name ?? item.kind}-${i}`} media={item} />
+        <AttachmentTile key={`${item.url ?? item.name ?? item.kind}-${i}`} attachment={item} />
       ))}
-    </div>
-  );
-}
-
-function MediaCell({ media }: { media: UIMediaAttachment }) {
-  const { t } = useTranslation();
-  const hasUrl = typeof media.url === "string" && media.url.length > 0;
-
-  if (media.kind === "video" && hasUrl) {
-    return (
-      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
-        <video
-          src={media.url}
-          controls
-          preload="metadata"
-          className="block max-h-[26rem] w-full bg-black"
-          aria-label={media.name ? `${t("message.videoAttachment", { defaultValue: "Video attachment" })}: ${media.name}` : t("message.videoAttachment", { defaultValue: "Video attachment" })}
-        />
-        {media.name ? (
-          <figcaption className="truncate px-3 py-1.5 text-[11.5px] text-muted-foreground">
-            {media.name}
-          </figcaption>
-        ) : null}
-      </figure>
-    );
-  }
-
-  const label =
-    media.kind === "video"
-      ? t("message.videoAttachment", { defaultValue: "Video attachment" })
-      : t("message.fileAttachment", { defaultValue: "File attachment" });
-  const Icon = media.kind === "video" ? PlaySquare : FileIcon;
-
-  const inner = (
-    <>
-      <Icon className="h-4 w-4 flex-none" aria-hidden />
-      <span className="truncate">{media.name ?? label}</span>
-    </>
-  );
-
-  if (hasUrl) {
-    return (
-      <a
-        href={media.url}
-        download={media.name ?? label}
-        title={media.name ?? undefined}
-        aria-label={label}
-        className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground hover:underline"
-      >
-        {inner}
-      </a>
-    );
-  }
-
-  return (
-    <div
-      className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-      title={media.name ?? undefined}
-      aria-label={label}
-    >
-      {inner}
     </div>
   );
 }
@@ -494,6 +632,7 @@ interface ReasoningBubbleProps {
   hasBodyBelow: boolean;
   /** When true, skip the slide-in wrapper (used inside ``AgentActivityCluster``). */
   embeddedInCluster?: boolean;
+  onOpenFilePreview?: (path: string) => void;
 }
 
 /**
@@ -515,6 +654,7 @@ export function ReasoningBubble({
   streaming,
   hasBodyBelow,
   embeddedInCluster = false,
+  onOpenFilePreview,
 }: ReasoningBubbleProps) {
   const { t } = useTranslation();
   const [userToggled, setUserToggled] = useState(false);
@@ -573,13 +713,14 @@ export function ReasoningBubble({
         >
           <MarkdownText
             streaming={streaming}
+            onOpenFilePreview={onOpenFilePreview}
             className={cn(
               "text-[12.5px] italic text-muted-foreground/88",
               "prose-p:my-1.5 prose-li:my-0.5",
               "prose-headings:mt-2 prose-headings:mb-1 prose-headings:font-medium",
               "prose-headings:text-muted-foreground/92 prose-strong:text-muted-foreground",
               "prose-h1:text-[15px] prose-h2:text-[13.5px] prose-h3:text-[12.5px] prose-h4:text-[12px]",
-              "prose-a:text-muted-foreground/95 prose-a:underline hover:prose-a:opacity-90",
+              "prose-a:text-blue-500 prose-a:underline hover:prose-a:text-blue-600 dark:prose-a:text-blue-300 dark:hover:prose-a:text-blue-200",
               "prose-code:text-[0.92em]",
             )}
           >
